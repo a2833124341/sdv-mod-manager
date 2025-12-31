@@ -1113,3 +1113,349 @@ window.addEventListener('beforeinstallprompt', (e) => {
     }, 3000);
 });
 </script>
+// 1. 数据导出功能
+function exportAllData() {
+    const manager = window.manager || new TailNumberManager();
+    const data = {
+        blogAuthors: Array.from(manager.blogAuthors.entries()),
+        recentMods: manager.recentMods,
+        timestamp: new Date().toISOString(),
+        version: '1.0'
+    };
+    
+    const blob = new Blob([JSON.stringify(data, null, 2)], {
+        type: 'application/json'
+    });
+    
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `sdv-mods-backup-${new Date().toLocaleDateString('zh-CN')}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    
+    manager.showToast('数据导出成功！', 'success');
+}
+
+// 2. 数据导入功能
+function importData(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            const data = JSON.parse(e.target.result);
+            const manager = window.manager || new TailNumberManager();
+            
+            // 恢复博客作者
+            if (data.blogAuthors) {
+                manager.blogAuthors = new Map(data.blogAuthors);
+            }
+            
+            // 恢复最近记录
+            if (data.recentMods) {
+                manager.recentMods = data.recentMods;
+            }
+            
+            manager.saveToStorage();
+            manager.updateBlogAuthorsDisplay();
+            manager.updateRecentDisplay();
+            
+            manager.showToast('数据导入成功！', 'success');
+        } catch (error) {
+            alert('导入失败：文件格式错误');
+            console.error(error);
+        }
+    };
+    reader.readAsText(file);
+}
+
+// 3. 快速搜索功能
+class ModSearch {
+    constructor() {
+        this.searchIndex = new Map();
+        this.buildIndex();
+    }
+    
+    buildIndex() {
+        const manager = window.manager || new TailNumberManager();
+        
+        // 索引尾号
+        manager.recentMods.forEach(mod => {
+            this.searchIndex.set(mod.tailNumber, {
+                type: 'tail',
+                data: mod
+            });
+        });
+        
+        // 索引作者
+        manager.blogAuthors.forEach((authorData, authorName) => {
+            this.searchIndex.set(authorName, {
+                type: 'author',
+                data: authorData
+            });
+        });
+    }
+    
+    search(query) {
+        if (!query.trim()) return [];
+        
+        const results = [];
+        const lowerQuery = query.toLowerCase();
+        
+        // 搜索尾号
+        const manager = window.manager || new TailNumberManager();
+        manager.recentMods.forEach(mod => {
+            if (mod.tailNumber.includes(query)) {
+                results.push({
+                    type: 'recent_tail',
+                    score: 10,
+                    data: mod
+                });
+            }
+        });
+        
+        // 搜索作者
+        manager.blogAuthors.forEach((authorData, authorName) => {
+            if (authorName.toLowerCase().includes(lowerQuery)) {
+                results.push({
+                    type: 'author',
+                    score: 8,
+                    data: { name: authorName, ...authorData }
+                });
+            }
+        });
+        
+        // 按分数排序
+        return results.sort((a, b) => b.score - a.score).slice(0, 10);
+    }
+}
+
+// 4. 添加快捷键支持
+function setupKeyboardShortcuts() {
+    document.addEventListener('keydown', (e) => {
+        // Ctrl+E 导出
+        if (e.ctrlKey && e.key === 'e') {
+            e.preventDefault();
+            exportAllData();
+        }
+        
+        // Ctrl+F 聚焦搜索
+        if (e.ctrlKey && e.key === 'f') {
+            e.preventDefault();
+            const searchInput = document.getElementById('search-input');
+            if (searchInput) searchInput.focus();
+        }
+        
+        // Esc 清除搜索
+        if (e.key === 'Escape') {
+            const searchInput = document.getElementById('search-input');
+            if (searchInput) {
+                searchInput.value = '';
+                hideSearchResults();
+            }
+        }
+    });
+}
+
+// ==================== 新增功能结束 ====================
+
+// 修改 initApp 函数，添加快捷键和新功能
+function initApp() {
+    const manager = new TailNumberManager();
+    window.manager = manager; // 暴露到全局，方便调试
+    
+    // ... 现有的事件绑定代码 ...
+    
+    // 添加快捷键
+    setupKeyboardShortcuts();
+    
+    // 添加搜索框（如果不存在）
+    addSearchBox();
+    
+    // 添加导出/导入按钮
+    addExportImportButtons();
+}
+
+// 添加搜索框到界面
+function addSearchBox() {
+    const container = document.querySelector('.container');
+    if (!container) return;
+    
+    // 检查是否已存在搜索框
+    if (document.getElementById('global-search')) return;
+    
+    const searchHtml = `
+        <div class="search-section animate-in" style="animation-delay: 0.15s; margin-bottom: 1.5rem;">
+            <div class="input-group">
+                <input type="text" 
+                       id="global-search" 
+                       placeholder="搜索尾号或作者..."
+                       style="width: 100%; padding: 15px; border-radius: 10px; border: 2px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.05); color: var(--text); font-size: 1rem;">
+                <div id="search-results" style="display: none; margin-top: 10px; background: var(--card-bg); border-radius: 10px; padding: 10px; max-height: 300px; overflow-y: auto;"></div>
+            </div>
+        </div>
+    `;
+    
+    // 插入到博客收藏夹之前
+    const blogSection = document.querySelector('.blog-favorites');
+    if (blogSection) {
+        blogSection.insertAdjacentHTML('beforebegin', searchHtml);
+    } else {
+        container.insertAdjacentHTML('afterbegin', searchHtml);
+    }
+    
+    // 绑定搜索事件
+    const searchInput = document.getElementById('global-search');
+    if (searchInput) {
+        let searchTimeout;
+        searchInput.addEventListener('input', (e) => {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                performSearch(e.target.value);
+            }, 300);
+        });
+    }
+}
+
+// 执行搜索
+function performSearch(query) {
+    const resultsDiv = document.getElementById('search-results');
+    if (!resultsDiv || !query.trim()) {
+        resultsDiv.style.display = 'none';
+        return;
+    }
+    
+    const searcher = new ModSearch();
+    const results = searcher.search(query);
+    
+    if (results.length === 0) {
+        resultsDiv.innerHTML = '<div style="padding: 20px; text-align: center; color: #888;">未找到结果</div>';
+        resultsDiv.style.display = 'block';
+        return;
+    }
+    
+    let html = '<div class="search-results-list">';
+    results.forEach(result => {
+        switch(result.type) {
+            case 'recent_tail':
+                const mod = result.data;
+                html += `
+                    <div class="search-result-item" style="padding: 12px; border-bottom: 1px solid rgba(255,255,255,0.05); cursor: pointer;" 
+                         onclick="window.manager.currentSource='${mod.source}'; window.manager.updateTabUI(); window.manager.openModPage('${mod.tailNumber}');">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <strong>尾号: ${mod.tailNumber}</strong>
+                                <div style="font-size: 0.9rem; color: #aaa;">${mod.sourceName} • ${mod.author ? '作者: ' + mod.author : ''}</div>
+                            </div>
+                            <div style="color: #4CAF50; font-size: 0.9rem;">点击打开</div>
+                        </div>
+                    </div>
+                `;
+                break;
+                
+            case 'author':
+                const author = result.data;
+                html += `
+                    <div class="search-result-item" style="padding: 12px; border-bottom: 1px solid rgba(255,255,255,0.05);">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <strong>作者: ${author.name}</strong>
+                                <div style="font-size: 0.9rem; color: #aaa;">${author.mods?.length || 0}个Mod • 最后访问: ${new Date(author.lastVisited).toLocaleDateString()}</div>
+                            </div>
+                            <div style="color: #2196F3; font-size: 0.9rem;">博客作者</div>
+                        </div>
+                    </div>
+                `;
+                break;
+        }
+    });
+    html += '</div>';
+    
+    resultsDiv.innerHTML = html;
+    resultsDiv.style.display = 'block';
+}
+
+// 隐藏搜索结果
+function hideSearchResults() {
+    const resultsDiv = document.getElementById('search-results');
+    if (resultsDiv) {
+        resultsDiv.style.display = 'none';
+    }
+}
+
+// 添加导出/导入按钮
+function addExportImportButtons() {
+    const quickInput = document.querySelector('.quick-input');
+    if (!quickInput) return;
+    
+    // 检查是否已存在按钮
+    if (document.getElementById('export-btn')) return;
+    
+    const buttonsHtml = `
+        <div class="data-management" style="margin-top: 15px; display: flex; gap: 10px;">
+            <button id="export-btn" style="flex: 1; padding: 12px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; border-radius: 10px; cursor: pointer; font-size: 0.95rem;">
+                <i class="fas fa-download"></i> 导出数据
+            </button>
+            <label for="import-input" style="flex: 1; padding: 12px; background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%); color: white; border: none; border-radius: 10px; cursor: pointer; font-size: 0.95rem; text-align: center; display: block;">
+                <i class="fas fa-upload"></i> 导入数据
+                <input type="file" id="import-input" accept=".json" style="display: none;">
+            </label>
+        </div>
+    `;
+    
+    quickInput.insertAdjacentHTML('beforeend', buttonsHtml);
+    
+    // 绑定按钮事件
+    document.getElementById('export-btn').addEventListener('click', exportAllData);
+    document.getElementById('import-input').addEventListener('change', importData);
+}
+
+// ==================== 初始化 ====================
+
+// 页面加载完成后初始化
+document.addEventListener('DOMContentLoaded', function() {
+    initApp();
+    
+    // 点击页面其他地方隐藏搜索结果
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('#global-search') && !e.target.closest('#search-results')) {
+            hideSearchResults();
+        }
+    });
+});
+
+// 添加必要的CSS样式
+const style = document.createElement('style');
+style.textContent = `
+    .search-result-item:hover {
+        background: rgba(255,255,255,0.05);
+    }
+    
+    .search-result-item:active {
+        background: rgba(255,255,255,0.1);
+    }
+    
+    #export-btn:active, label[for="import-input"]:active {
+        transform: scale(0.98);
+    }
+    
+    /* 暗色滚动条 */
+    #search-results::-webkit-scrollbar {
+        width: 8px;
+    }
+    
+    #search-results::-webkit-scrollbar-track {
+        background: rgba(255,255,255,0.05);
+        border-radius: 4px;
+    }
+    
+    #search-results::-webkit-scrollbar-thumb {
+        background: rgba(255,255,255,0.2);
+        border-radius: 4px;
+    }
+`;
+document.head.appendChild(style);
